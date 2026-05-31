@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+requests
+pandas
+python-dotenv
+openai>=1.81.0
+pytest
+langgraph
+typing_extensions>=4.15.0
