@@ -38,6 +38,18 @@ def sample_analysis_context() -> dict:
         "ratios": {"operating_margin": 0.1},
         "growth": {},
         "risk_signals": [],
+        "agent_decision": {
+            "needs_additional_analysis": True,
+            "analysis_types": ["profitability"],
+            "reason": "수익성 지표를 추가 확인합니다.",
+        },
+        "additional_analysis": {
+            "profitability": {
+                "title": "수익성 추가 분석",
+                "summary": "영업이익과 순이익 흐름을 추가로 확인했습니다.",
+                "items": ["영업이익률: 10.00%"],
+            }
+        },
         "raw_accounts": [],
         "explanation": "테스트 해설",
     }
@@ -62,6 +74,8 @@ def test_analysis_endpoint_creates_session(monkeypatch) -> None:
     payload = response.json()
     assert payload["session_id"]
     assert payload["company_name"] == "테스트전자"
+    assert payload["agent_decision"]["analysis_types"] == ["profitability"]
+    assert payload["additional_analysis"]["profitability"]["title"] == "수익성 추가 분석"
     assert payload["messages"] == []
 
 
