@@ -157,6 +157,33 @@ def generate_financial_explanation(
     return sanitize_financial_answer(content.strip())
 
 
+COMPANY_SUGGESTION_SYSTEM_PROMPT = """너는 한국 기업명 교정 도우미다.
+사용자가 입력한 기업명에 오타가 있거나 정확하지 않을 때, 실제 존재할 가능성이 높은 한국 기업명을 최대 5개 제안한다.
+기업명만 쉼표로 구분해서 한 줄로 답한다. 다른 설명은 절대 하지 않는다."""
+
+
+def suggest_company_names(company_name: str) -> list[str]:
+    api_key = get_upstage_api_key()
+    if not api_key:
+        return []
+
+    client = create_upstage_client(api_key)
+    response = client.chat.completions.create(
+        model=get_upstage_model(),
+        messages=[
+            {"role": "system", "content": COMPANY_SUGGESTION_SYSTEM_PROMPT},
+            {"role": "user", "content": f"입력: {company_name}"},
+        ],
+        stream=False,
+        temperature=0.1,
+    )
+
+    content = response.choices[0].message.content
+    if not content:
+        return []
+    return [name.strip() for name in content.split(",") if name.strip()]
+
+
 def answer_followup_question(context: dict, question: str) -> str:
     cleaned_question = question.strip()
     if not cleaned_question:

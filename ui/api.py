@@ -34,6 +34,14 @@ def post_json(path: str, payload: dict[str, Any], timeout: int = 180) -> dict[st
         raise RuntimeError("백엔드 응답을 JSON으로 해석하지 못했습니다.") from exc
 
 
+def post_suggest(company_name: str) -> list[str]:
+    try:
+        result = post_json("/suggest", {"company_name": company_name})
+        return result.get("suggestions", [])
+    except Exception:
+        return []
+
+
 def get_json(path: str, timeout: int = 30) -> dict[str, Any]:
     try:
         response = requests.get(api_url(path), timeout=timeout)

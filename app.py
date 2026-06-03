@@ -11,11 +11,18 @@ from ui.analysis import (
     render_analysis_result,
     run_analysis_with_progress,
 )
+from ui.api import post_suggest
 from ui.chat import render_followup_area
 from ui.config import REPORT_OPTIONS
 from ui.scroll import render_top_anchor, scroll_to_top_once
 from ui.session import cleanup_draft_session, render_session_history_sidebar
 from ui.styles import render_chat_styles
+
+
+def _clear_error_and_suggestions() -> None:
+    st.session_state.pop("analysis_error_message", None)
+    st.session_state.pop("company_suggestions", None)
+    st.session_state.pop("company_suggestions_params", None)
 
 
 def main() -> None:
@@ -35,15 +42,18 @@ def main() -> None:
             analyze_clicked = st.form_submit_button("분석하기", type="primary", use_container_width=True)
 
     if analyze_clicked:
+        _clear_error_and_suggestions()
         queue_new_analysis(company_name, int(bsns_year), report_name)
 
-    analysis_error_message = st.session_state.pop("analysis_error_message", None)
+    # .get() 사용 — 에러 메시지가 세션에 유지돼야 버튼 클릭 시 재렌더링에서도 버튼이 표시됨
+    analysis_error_message = st.session_state.get("analysis_error_message")
     pending_analysis_request = st.session_state.get("pending_analysis_request")
     with st.sidebar:
         render_session_history_sidebar()
 
     if pending_analysis_request:
         st.session_state.pop("pending_analysis_request", None)
+        _clear_error_and_suggestions()
         draft_session_id = str(pending_analysis_request.get("draft_session_id") or "")
         try:
             run_analysis_with_progress(
@@ -54,7 +64,16 @@ def main() -> None:
             )
         except Exception as exc:
             cleanup_draft_session(draft_session_id)
-            st.session_state["analysis_error_message"] = str(exc)
+            error_msg = str(exc)
+            st.session_state["analysis_error_message"] = error_msg
+            if "기업 후보를 찾지 못했습니다" in error_msg:
+                fetched = post_suggest(str(pending_analysis_request["company_name"]))
+                if fetched:
+                    st.session_state["company_suggestions"] = fetched
+                    st.session_state["company_suggestions_params"] = {
+                        "bsns_year": int(pending_analysis_request["bsns_year"]),
+                        "report_name": str(pending_analysis_request["report_name"]),
+                    }
             st.session_state["scroll_to_top"] = True
             st.rerun()
         return
@@ -63,7 +82,21 @@ def main() -> None:
     with body.container():
         if analysis_error_message:
             st.error(f"분석을 완료하지 못했습니다. {analysis_error_message}")
-            st.caption("기업명을 다시 확인하거나 왼쪽 최근 대화에서 이전 분석으로 돌아갈 수 있습니다.")
+            suggestions = st.session_state.get("company_suggestions")
+            suggestions_params = st.session_state.get("company_suggestions_params", {})
+            if suggestions:
+                st.write("혹시 이 기업을 찾으셨나요?")
+                cols = st.columns(min(len(suggestions), 5))
+                for i, name in enumerate(suggestions[:5]):
+                    if cols[i].button(name, key=f"suggest_{i}"):
+                        _clear_error_and_suggestions()
+                        queue_new_analysis(
+                            name,
+                            int(suggestions_params.get("bsns_year", bsns_year)),
+                            str(suggestions_params.get("report_name", report_name)),
+                        )
+            else:
+                st.caption("기업명을 다시 확인하거나 왼쪽 최근 대화에서 이전 분석으로 돌아갈 수 있습니다.")
         elif "last_analysis" in st.session_state:
             render_analysis_result(st.session_state["last_analysis"])
             render_followup_area()
