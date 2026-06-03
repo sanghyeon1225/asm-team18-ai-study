@@ -71,3 +71,11 @@ class SessionResponse(BaseModel):
     title: str
     created_at: str
     updated_at: str
+
+
+class SuggestRequest(BaseModel):
+    company_name: str = Field(..., min_length=1)
+
+
+class SuggestResponse(BaseModel):
+    suggestions: list[str]

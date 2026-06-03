@@ -13,9 +13,11 @@ from backend.schemas import (
     ChatResponse,
     SessionListResponse,
     SessionResponse,
+    SuggestRequest,
+    SuggestResponse,
 )
 from backend.session_store import add_message, create_session, get_messages, get_session, list_sessions
-from src.llm_client import answer_followup_question
+from src.llm_client import answer_followup_question, suggest_company_names
 from src.workflow import build_financial_workflow
 
 
@@ -167,6 +169,15 @@ def chat(request: ChatRequest) -> dict[str, Any]:
         "answer": answer,
         "messages": messages,
     }
+
+
+@app.post("/suggest", response_model=SuggestResponse)
+def suggest(request: SuggestRequest) -> dict[str, Any]:
+    try:
+        suggestions = suggest_company_names(request.company_name.strip())
+    except Exception:
+        suggestions = []
+    return {"suggestions": suggestions}
 
 
 @app.get("/sessions", response_model=SessionListResponse)
