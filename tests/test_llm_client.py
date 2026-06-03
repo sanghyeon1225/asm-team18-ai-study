@@ -99,6 +99,74 @@ def test_generate_financial_explanation_calls_upstage_with_policy_prompt(monkeyp
     assert "6. 면책 문구" in user_prompt
 
 
+def test_decide_additional_analysis_returns_rule_fallback_without_api_key(monkeypatch) -> None:
+    class FailingOpenAI:
+        def __init__(self, api_key: str, base_url: str) -> None:
+            raise AssertionError("Upstage client should not be called without an API key.")
+
+    monkeypatch.setenv("UPSTAGE_API_KEY", "")
+    monkeypatch.setattr(llm_client, "OpenAI", FailingOpenAI)
+
+    result = llm_client.decide_additional_analysis(
+        numbers={"revenue": 1000, "liabilities": 3000, "equity": 1000},
+        ratios={"debt_ratio": 3.0, "equity_ratio": 0.25},
+        growth={},
+        risk_signals=["부채비율이 200%를 초과해 재무 안정성 추가 확인 필요"],
+    )
+
+    assert result["needs_additional_analysis"] is True
+    assert result["analysis_types"] == ["debt_risk", "capital_structure"]
+    assert result["source"] == "rule_fallback"
+
+
+def test_decide_additional_analysis_calls_upstage_with_json_prompt(monkeypatch) -> None:
+    class FakeDecisionMessage:
+        content = '{"needs_additional_analysis": true, "analysis_types": ["growth", "unknown"], "reason": "성장률 변동이 큽니다."}'
+
+    class FakeDecisionChoice:
+        message = FakeDecisionMessage()
+
+    class FakeDecisionResponse:
+        choices = [FakeDecisionChoice()]
+
+    class FakeDecisionCompletions:
+        def create(self, **kwargs) -> FakeDecisionResponse:
+            FakeDecisionOpenAI.calls.append(kwargs)
+            return FakeDecisionResponse()
+
+    class FakeDecisionChat:
+        completions = FakeDecisionCompletions()
+
+    class FakeDecisionOpenAI:
+        calls = []
+
+        def __init__(self, api_key: str, base_url: str) -> None:
+            self.chat = FakeDecisionChat()
+
+    FakeDecisionOpenAI.calls = []
+    monkeypatch.setenv("UPSTAGE_API_KEY", "test-upstage-key")
+    monkeypatch.setenv("UPSTAGE_MODEL", "solar-test")
+    monkeypatch.setattr(llm_client, "OpenAI", FakeDecisionOpenAI)
+
+    result = llm_client.decide_additional_analysis(
+        numbers={"revenue": 1000},
+        ratios={"operating_margin": 0.1},
+        growth={"revenue_growth": 0.4},
+        risk_signals=[],
+    )
+
+    assert result == {
+        "needs_additional_analysis": True,
+        "analysis_types": ["growth"],
+        "reason": "성장률 변동이 큽니다.",
+        "source": "llm",
+    }
+    assert FakeDecisionOpenAI.calls[0]["model"] == "solar-test"
+    assert FakeDecisionOpenAI.calls[0]["temperature"] == 0
+    assert "추가 분석 라우터" in FakeDecisionOpenAI.calls[0]["messages"][0]["content"]
+    assert '"revenue_growth":' in FakeDecisionOpenAI.calls[0]["messages"][1]["content"]
+
+
 def test_answer_followup_question_returns_fallback_without_api_key(monkeypatch) -> None:
     class FailingOpenAI:
         def __init__(self, api_key: str, base_url: str) -> None:
