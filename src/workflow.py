@@ -12,8 +12,9 @@ from src.financial_analyzer import (
     calculate_ratios,
     detect_risk_signals,
     extract_key_numbers,
+    format_ratio,
 )
-from src.llm_client import generate_financial_explanation
+from src.llm_client import decide_additional_analysis, generate_financial_explanation
 from src.safety import SAFETY_DISCLAIMER, sanitize_financial_answer
 
 
@@ -32,6 +33,8 @@ class FinancialWorkflowState(TypedDict, total=False):
     ratios: dict[str, float | None]
     growth: dict[str, float | None]
     risk_signals: list[str]
+    agent_decision: dict[str, Any]
+    additional_analysis: dict[str, Any]
     explanation: str
     error: str | None
 
@@ -128,6 +131,110 @@ def analyze_financials_node(state: FinancialWorkflowState) -> FinancialWorkflowS
     }
 
 
+def _format_amount(value: int | float | None) -> str:
+    if value is None:
+        return "데이터 없음"
+    return f"{float(value):,.0f}원"
+
+
+def _section(title: str, summary: str, items: list[str]) -> dict[str, Any]:
+    return {
+        "title": title,
+        "summary": summary,
+        "items": items,
+    }
+
+
+def decide_additional_analysis_node(state: FinancialWorkflowState) -> FinancialWorkflowState:
+    if _has_error(state):
+        return {}
+
+    decision = decide_additional_analysis(
+        numbers=state.get("numbers", {}),
+        ratios=state.get("ratios", {}),
+        growth=state.get("growth", {}),
+        risk_signals=state.get("risk_signals", []),
+    )
+    return {"agent_decision": decision}
+
+
+def run_additional_analysis_node(state: FinancialWorkflowState) -> FinancialWorkflowState:
+    if _has_error(state):
+        return {}
+
+    decision = state.get("agent_decision") or {}
+    if not decision.get("needs_additional_analysis"):
+        return {"additional_analysis": {}}
+
+    numbers = state.get("numbers", {})
+    ratios = state.get("ratios", {})
+    growth = state.get("growth", {})
+    analysis_types = decision.get("analysis_types") or []
+    additional_analysis: dict[str, Any] = {}
+
+    if "debt_risk" in analysis_types:
+        additional_analysis["debt_risk"] = _section(
+            "부채 안정성 추가 분석",
+            "부채와 자본의 균형을 추가로 확인했습니다.",
+            [
+                f"부채비율: {format_ratio(ratios.get('debt_ratio'))}",
+                f"자기자본비율: {format_ratio(ratios.get('equity_ratio'))}",
+                f"부채총계: {_format_amount(numbers.get('liabilities'))}",
+                f"자본총계: {_format_amount(numbers.get('equity'))}",
+            ],
+        )
+
+    if "profitability" in analysis_types:
+        additional_analysis["profitability"] = _section(
+            "수익성 추가 분석",
+            "영업이익과 순이익 흐름을 추가로 확인했습니다.",
+            [
+                f"영업이익률: {format_ratio(ratios.get('operating_margin'))}",
+                f"순이익률: {format_ratio(ratios.get('net_margin'))}",
+                f"영업이익: {_format_amount(numbers.get('operating_profit'))}",
+                f"당기순이익: {_format_amount(numbers.get('net_income'))}",
+            ],
+        )
+
+    if "growth" in analysis_types:
+        additional_analysis["growth"] = _section(
+            "성장성 추가 분석",
+            "전년도 대비 변동 폭이 큰 항목을 추가로 확인했습니다.",
+            [
+                f"매출 성장률: {format_ratio(growth.get('revenue_growth'))}",
+                f"영업이익 성장률: {format_ratio(growth.get('operating_profit_growth'))}",
+                f"순이익 성장률: {format_ratio(growth.get('net_income_growth'))}",
+                f"자산 성장률: {format_ratio(growth.get('assets_growth'))}",
+            ],
+        )
+
+    if "capital_structure" in analysis_types:
+        additional_analysis["capital_structure"] = _section(
+            "자본 구조 추가 분석",
+            "자산, 부채, 자본의 구성 비율을 추가로 확인했습니다.",
+            [
+                f"자산총계: {_format_amount(numbers.get('assets'))}",
+                f"부채총계: {_format_amount(numbers.get('liabilities'))}",
+                f"자본총계: {_format_amount(numbers.get('equity'))}",
+                f"자기자본비율: {format_ratio(ratios.get('equity_ratio'))}",
+            ],
+        )
+
+    if "raw_account_review" in analysis_types:
+        missing_keys = [key for key, value in numbers.items() if value is None]
+        missing_text = ", ".join(missing_keys) if missing_keys else "추가 누락 항목 없음"
+        additional_analysis["raw_account_review"] = _section(
+            "원본 계정 확인 필요",
+            "일부 계정은 기업별 표기 차이 때문에 원본 공시 계정 확인이 도움이 됩니다.",
+            [
+                f"추출되지 않은 핵심 계정: {missing_text}",
+                "DART 주요계정 원본과 사업보고서 주석을 함께 확인하는 것이 좋습니다.",
+            ],
+        )
+
+    return {"additional_analysis": additional_analysis}
+
+
 def generate_explanation_node(state: FinancialWorkflowState) -> FinancialWorkflowState:
     if _has_error(state):
         return {}
@@ -166,6 +273,8 @@ def build_financial_workflow():
     graph.add_node("fetch_current_financials", fetch_current_financials_node)
     graph.add_node("fetch_previous_financials", fetch_previous_financials_node)
     graph.add_node("analyze_financials", analyze_financials_node)
+    graph.add_node("decide_additional_analysis", decide_additional_analysis_node)
+    graph.add_node("run_additional_analysis", run_additional_analysis_node)
     graph.add_node("generate_explanation", generate_explanation_node)
     graph.add_node("validate_answer", validate_answer_node)
 
@@ -173,7 +282,9 @@ def build_financial_workflow():
     graph.add_edge("resolve_company", "fetch_current_financials")
     graph.add_edge("fetch_current_financials", "fetch_previous_financials")
     graph.add_edge("fetch_previous_financials", "analyze_financials")
-    graph.add_edge("analyze_financials", "generate_explanation")
+    graph.add_edge("analyze_financials", "decide_additional_analysis")
+    graph.add_edge("decide_additional_analysis", "run_additional_analysis")
+    graph.add_edge("run_additional_analysis", "generate_explanation")
     graph.add_edge("generate_explanation", "validate_answer")
     graph.add_edge("validate_answer", END)
 

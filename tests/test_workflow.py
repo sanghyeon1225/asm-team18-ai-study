@@ -81,6 +81,62 @@ def test_analyze_financials_node_extracts_numbers_and_growth() -> None:
     assert result["risk_signals"] == []
 
 
+def test_decide_additional_analysis_node_records_agent_decision(monkeypatch) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "decide_additional_analysis",
+        lambda numbers, ratios, growth, risk_signals: {
+            "needs_additional_analysis": True,
+            "analysis_types": ["growth"],
+            "reason": "성장률 변동이 큽니다.",
+            "source": "llm",
+        },
+    )
+
+    result = workflow.decide_additional_analysis_node(
+        {
+            "numbers": {"revenue": 1000},
+            "ratios": {},
+            "growth": {"revenue_growth": 0.4},
+            "risk_signals": [],
+        }
+    )
+
+    assert result["agent_decision"]["analysis_types"] == ["growth"]
+    assert result["agent_decision"]["source"] == "llm"
+
+
+def test_run_additional_analysis_node_builds_selected_sections() -> None:
+    result = workflow.run_additional_analysis_node(
+        {
+            "numbers": {
+                "revenue": 1000,
+                "operating_profit": 100,
+                "net_income": 80,
+                "assets": 2000,
+                "liabilities": 1200,
+                "equity": 800,
+            },
+            "ratios": {
+                "debt_ratio": 1.5,
+                "equity_ratio": 0.4,
+                "operating_margin": 0.1,
+                "net_margin": 0.08,
+            },
+            "growth": {"revenue_growth": 0.4},
+            "agent_decision": {
+                "needs_additional_analysis": True,
+                "analysis_types": ["debt_risk", "growth"],
+            },
+        }
+    )
+
+    additional_analysis = result["additional_analysis"]
+    assert additional_analysis["debt_risk"]["title"] == "부채 안정성 추가 분석"
+    assert additional_analysis["growth"]["title"] == "성장성 추가 분석"
+    assert any("부채비율" in item for item in additional_analysis["debt_risk"]["items"])
+
+
 def test_validate_answer_node_removes_recommendation_and_adds_disclaimer() -> None:
     result = workflow.validate_answer_node(
         {
@@ -106,6 +162,22 @@ def test_build_financial_workflow_invokes_nodes(monkeypatch) -> None:
     )
     monkeypatch.setattr(workflow, "fetch_current_financials_node", lambda state: {"current_df": sample_current_df()})
     monkeypatch.setattr(workflow, "fetch_previous_financials_node", lambda state: {"previous_df": sample_previous_df()})
+    monkeypatch.setattr(
+        workflow,
+        "decide_additional_analysis_node",
+        lambda state: {
+            "agent_decision": {
+                "needs_additional_analysis": True,
+                "analysis_types": ["growth"],
+                "reason": "성장률 변동이 큽니다.",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_additional_analysis_node",
+        lambda state: {"additional_analysis": {"growth": {"title": "성장성 추가 분석", "items": []}}},
+    )
     monkeypatch.setattr(workflow, "generate_explanation_node", lambda state: {"explanation": "테스트 해설"})
 
     compiled = workflow.build_financial_workflow()
@@ -121,4 +193,6 @@ def test_build_financial_workflow_invokes_nodes(monkeypatch) -> None:
 
     assert result["corp_code"] == "00123456"
     assert result["numbers"]["revenue"] == 1000
+    assert result["agent_decision"]["analysis_types"] == ["growth"]
+    assert "growth" in result["additional_analysis"]
     assert workflow.INVESTMENT_DISCLAIMER in result["explanation"]

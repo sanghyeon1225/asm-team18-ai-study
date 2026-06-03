@@ -32,6 +32,8 @@ class AnalysisResponse(BaseModel):
     ratios: dict[str, float | None]
     growth: dict[str, float | None]
     risk_signals: list[str]
+    agent_decision: dict[str, Any] = Field(default_factory=dict)
+    additional_analysis: dict[str, Any] = Field(default_factory=dict)
     raw_accounts: list[dict[str, Any]]
     explanation: str
     messages: list[ChatMessage] = Field(default_factory=list)

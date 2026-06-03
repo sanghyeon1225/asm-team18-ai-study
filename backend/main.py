@@ -73,6 +73,8 @@ def _build_analysis_context(state: dict[str, Any]) -> dict[str, Any]:
         "ratios": state.get("ratios") or {},
         "growth": state.get("growth") or {},
         "risk_signals": state.get("risk_signals") or [],
+        "agent_decision": state.get("agent_decision") or {},
+        "additional_analysis": state.get("additional_analysis") or {},
         "raw_accounts": _raw_accounts_preview(current_df),
         "explanation": state.get("explanation") or "",
     }
@@ -90,6 +92,8 @@ def _followup_context(context: dict[str, Any]) -> dict[str, Any]:
         "previous_data_available",
         "growth",
         "risk_signals",
+        "agent_decision",
+        "additional_analysis",
         "raw_accounts",
     ]
     return {key: context.get(key) for key in allowed_keys}
