@@ -146,6 +146,32 @@ def render_candidate_info(context: dict[str, Any]) -> None:
     st.dataframe(display_candidates.head(10), use_container_width=True, hide_index=True)
 
 
+def render_additional_analysis(context: dict[str, Any]) -> None:
+    additional_analysis = context.get("additional_analysis") or {}
+    if not isinstance(additional_analysis, dict) or not additional_analysis:
+        return
+
+    st.subheader("AI 추가 분석")
+    decision = context.get("agent_decision") or {}
+    reason = str(decision.get("reason") or "").strip() if isinstance(decision, dict) else ""
+    if reason:
+        st.info(f"추가 분석 판단: {reason}")
+
+    for section in additional_analysis.values():
+        if not isinstance(section, dict):
+            continue
+
+        title = str(section.get("title") or "추가 분석")
+        summary = str(section.get("summary") or "").strip()
+        items = section.get("items") or []
+
+        st.markdown(f"**{title}**")
+        if summary:
+            st.write(summary)
+        if items:
+            st.markdown("\n".join(f"- {item}" for item in items))
+
+
 def render_analysis_result(context: dict[str, Any]) -> None:
     render_candidate_info(context)
 
@@ -192,6 +218,8 @@ def render_analysis_result(context: dict[str, Any]) -> None:
             st.warning(signal)
     else:
         st.success("현재 추출된 핵심 수치 기준으로는 주요 위험 신호가 뚜렷하게 표시되지 않았습니다. 전문 공시와 주석은 추가 확인이 필요합니다.")
+
+    render_additional_analysis(context)
 
     raw_accounts = context.get("raw_accounts") or []
     if raw_accounts:
