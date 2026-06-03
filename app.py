@@ -517,6 +517,73 @@ def render_chat_styles() -> None:
                 gap: 0.4rem;
             }
         }
+        .gt-chat-header {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            margin: 0.2rem 0 0.9rem;
+            padding: 0.85rem 1rem;
+            border: 1px solid rgba(37, 99, 235, 0.16);
+            border-radius: 0.9rem;
+            background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), rgba(14, 165, 233, 0.06));
+        }
+        .gt-chat-header-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 2.5rem;
+            width: 2.5rem;
+            height: 2.5rem;
+            border-radius: 999px;
+            background: #2563eb;
+            font-size: 1.2rem;
+        }
+        .gt-chat-header-title {
+            color: #0f172a;
+            font-size: 1.05rem;
+            font-weight: 800;
+            line-height: 1.3;
+        }
+        .gt-chat-header-sub {
+            margin-top: 0.12rem;
+            color: #64748b;
+            font-size: 0.82rem;
+            line-height: 1.35;
+        }
+        .gt-welcome-text {
+            color: #0f172a;
+            line-height: 1.6;
+        }
+        .gt-chip-label {
+            margin: 0.4rem 0 0.5rem;
+            color: #475569;
+            font-size: 0.84rem;
+            font-weight: 700;
+        }
+        div[class*="st-key-gt-chip-"] button {
+            min-height: 0;
+            padding: 0.5rem 0.85rem;
+            border: 1px solid rgba(37, 99, 235, 0.22);
+            border-radius: 999px;
+            background: #f8fafc;
+            color: #1e293b;
+            font-size: 0.88rem;
+            font-weight: 500;
+            line-height: 1.3;
+            text-align: left;
+            white-space: normal;
+            transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+        }
+        div[class*="st-key-gt-chip-"] button p {
+            font-size: inherit;
+            font-weight: inherit;
+            color: inherit;
+        }
+        div[class*="st-key-gt-chip-"] button:hover {
+            border-color: #2563eb;
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -980,25 +1047,74 @@ def render_analysis_result(context: dict[str, Any]) -> None:
     st.caption(SAFETY_DISCLAIMER)
 
 
-def render_followup_area() -> None:
-    context = st.session_state.get("last_analysis")
-    session_id = st.session_state.get("session_id")
-    if not context or not session_id:
-        return
+def build_suggested_questions(context: dict[str, Any]) -> list[str]:
+    """초보자가 바로 누를 수 있는 맥락 기반 추천 질문을 만든다."""
+    questions = [
+        "이 회사 재무 상태를 한마디로 요약해줘",
+        "부채가 많은 편이야? 쉽게 알려줘",
+        "영업이익률이 좋은 건지 설명해줘",
+    ]
+    if context.get("previous_data_available"):
+        questions.append("전년도랑 비교하면 뭐가 달라졌어?")
+    if context.get("risk_signals"):
+        questions.append("표시된 위험 신호가 무슨 뜻인지 알려줘")
+    return questions
 
-    st.divider()
-    st.subheader("추가 질문하기")
-    st.caption("분석된 재무 데이터 안에서만 답변합니다. 매수/매도 판단이나 투자 추천은 제공하지 않습니다.")
 
+def render_followup_header() -> None:
+    st.markdown(
+        """
+        <div class="gt-chat-header">
+            <div class="gt-chat-header-icon">💬</div>
+            <div>
+                <div class="gt-chat-header-title">공시톡 AI에게 물어보기</div>
+                <div class="gt-chat-header-sub">분석된 재무 데이터 안에서만 답해드려요 · 투자 추천은 제공하지 않습니다</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_chat_welcome(context: dict[str, Any]) -> None:
+    """채팅이 비어 있을 때 봇이 먼저 건네는 환영 메시지."""
+    company_name = str(context.get("company_name") or "이 기업").strip()
+    avatar_col, body_col = st.columns([0.06, 0.94])
+    with avatar_col:
+        st.markdown('<div class="gt-assistant-avatar">공</div>', unsafe_allow_html=True)
+    with body_col:
+        st.markdown('<div class="gt-assistant-name">공시톡 AI</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="gt-welcome-text">
+                <b>{html.escape(company_name)}</b> 분석을 마쳤어요! ✅<br>
+                위 결과에서 궁금한 점을 편하게 물어보세요.
+                무엇을 물어볼지 막막하다면 아래 추천 질문을 눌러도 좋아요. 😊
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_suggested_questions(context: dict[str, Any]) -> str | None:
+    """추천 질문 칩을 그리고, 클릭된 질문 문자열을 반환한다(없으면 None)."""
+    questions = build_suggested_questions(context)
+    if not questions:
+        return None
+
+    st.markdown('<div class="gt-chip-label">💡 이런 걸 물어볼 수 있어요</div>', unsafe_allow_html=True)
+    clicked: str | None = None
+    columns = st.columns(2)
+    for index, question in enumerate(questions):
+        with columns[index % 2]:
+            if st.button(question, key=f"gt-chip-{index}", use_container_width=True):
+                clicked = question
+    return clicked
+
+
+def submit_followup_question(question: str, session_id: str, chat_area: Any) -> None:
+    """타이핑 질문과 추천 질문 칩이 공유하는 단일 처리 경로."""
     messages = st.session_state.setdefault("messages", [])
-    chat_area = st.empty()
-
-    question = st.chat_input("분석 결과에 대해 질문해보세요. 예: 이 회사 부채가 많은 편이야?")
-    if not question:
-        with chat_area.container():
-            render_chat_messages(messages)
-        return
-
     pending_messages = [
         *messages,
         {"role": "user", "content": question},
@@ -1031,6 +1147,34 @@ def render_followup_area() -> None:
             }
         )
         st.rerun()
+
+
+def render_followup_area() -> None:
+    context = st.session_state.get("last_analysis")
+    session_id = st.session_state.get("session_id")
+    if not context or not session_id:
+        return
+
+    st.divider()
+    render_followup_header()
+
+    messages = st.session_state.setdefault("messages", [])
+    chat_area = st.empty()
+
+    # 추천 질문 칩과 입력창 중 어디서 질문이 들어와도 같은 경로로 처리한다.
+    clicked_question = render_suggested_questions(context)
+    typed_question = st.chat_input("분석 결과에 대해 질문해보세요. 예: 이 회사 부채가 많은 편이야?")
+    question = typed_question or clicked_question
+
+    if not question:
+        with chat_area.container():
+            if messages:
+                render_chat_messages(messages)
+            else:
+                render_chat_welcome(context)
+        return
+
+    submit_followup_question(question, session_id, chat_area)
 
 
 def main() -> None:
