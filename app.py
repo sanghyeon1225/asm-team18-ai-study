@@ -14,7 +14,7 @@ from ui.analysis import (
 from ui.api import post_suggest
 from ui.chat import render_followup_area
 from ui.config import REPORT_OPTIONS
-from ui.scroll import render_top_anchor, scroll_to_top_once
+from ui.scroll import render_top_anchor, scroll_to_chat_once, scroll_to_top_once
 from ui.session import cleanup_draft_session, render_session_history_sidebar
 from ui.styles import render_chat_styles
 
@@ -102,6 +102,8 @@ def main() -> None:
             render_followup_area()
         else:
             st.caption("왼쪽 사이드바에서 기업명과 보고서 조건을 입력한 뒤 분석하기를 눌러주세요.")
+
+    scroll_to_chat_once()
 
 
 if __name__ == "__main__":
