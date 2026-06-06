@@ -11,6 +11,7 @@ from typing import Any
 import streamlit as st
 
 from ui.api import post_json
+from ui.scroll import render_chat_bottom_anchor
 from ui.session import cache_session, upsert_session_summary
 
 
@@ -166,6 +167,7 @@ def submit_followup_question(question: str, session_id: str, chat_area: Any) -> 
         analysis = st.session_state.get("last_analysis") or {}
         cache_session(result["session_id"], analysis, messages)
         upsert_session_summary(result["session_id"], analysis, messages)
+        st.session_state["scroll_to_chat"] = True
         st.rerun()
     except Exception as exc:
         st.session_state["messages"].append(
@@ -174,6 +176,7 @@ def submit_followup_question(question: str, session_id: str, chat_area: Any) -> 
                 "content": f"추가 질문 답변을 생성하지 못했습니다. {exc}",
             }
         )
+        st.session_state["scroll_to_chat"] = True
         st.rerun()
 
 
@@ -200,6 +203,7 @@ def render_followup_area() -> None:
                 render_chat_messages(messages)
             else:
                 render_chat_welcome(context)
+            render_chat_bottom_anchor()
         return
 
     submit_followup_question(question, session_id, chat_area)
