@@ -10,9 +10,13 @@ from uuid import uuid4
 import streamlit as st
 
 from src.dart_client import REPORT_CODES
+from src.logging_config import get_logger
 from ui.api import get_json
 from ui.config import DRAFT_SESSION_PREFIX
 from ui.formatting import truncate_text
+
+
+logger = get_logger(__name__)
 
 
 def clear_current_session() -> None:
@@ -39,6 +43,7 @@ def cache_session(session_id: str, analysis: dict[str, Any], messages: list[dict
         "analysis": analysis,
         "messages": messages,
     }
+    logger.debug("세션 캐시 저장 | 세션=%s | 메시지=%s개", session_id, len(messages))
 
 
 def upsert_session_summary(
@@ -89,12 +94,14 @@ def create_draft_session(company_name: str, bsns_year: int, report_name: str) ->
     st.session_state["messages"] = []
     st.session_state.pop("last_analysis", None)
     upsert_session_summary(draft_session_id, draft_context, [])
+    logger.debug("임시 세션 생성 | 세션=%s | 기업=%s", draft_session_id, company_name)
     return draft_session_id
 
 
 def cleanup_draft_session(session_id: str | None) -> None:
     if not session_id or not str(session_id).startswith(DRAFT_SESSION_PREFIX):
         return
+    logger.debug("임시 세션 정리 | 세션=%s", session_id)
     remove_session_summary(session_id)
     remove_cached_session(session_id)
     if st.session_state.get("session_id") == session_id:
@@ -103,6 +110,7 @@ def cleanup_draft_session(session_id: str | None) -> None:
 
 def get_session_summaries() -> list[dict[str, Any]]:
     if "session_summaries" not in st.session_state:
+        logger.debug("세션 목록 로드 | 백엔드 조회")
         st.session_state["session_summaries"] = get_json("/sessions", timeout=5).get("sessions", [])
     return st.session_state.get("session_summaries", [])
 
@@ -110,11 +118,13 @@ def get_session_summaries() -> list[dict[str, Any]]:
 def load_session_from_backend(session_id: str) -> None:
     cached = st.session_state.setdefault("loaded_sessions", {}).get(session_id)
     if cached:
+        logger.info("세션 열기 | 캐시 사용 | 세션=%s", session_id)
         st.session_state["session_id"] = cached["session_id"]
         st.session_state["last_analysis"] = cached.get("analysis") or {}
         st.session_state["messages"] = cached.get("messages", [])
         return
 
+    logger.info("세션 열기 | 백엔드 조회 | 세션=%s", session_id)
     result = get_json(f"/sessions/{session_id}", timeout=10)
     analysis = result.get("analysis") or {}
     messages = result.get("messages", [])
@@ -122,11 +132,13 @@ def load_session_from_backend(session_id: str) -> None:
     st.session_state["last_analysis"] = analysis
     st.session_state["messages"] = messages
     cache_session(result["session_id"], analysis, messages)
+    logger.info("세션 열기 완료 | 세션=%s | 메시지=%s개", session_id, len(messages))
 
 
 def switch_to_session(session_id: str) -> None:
     if session_id == st.session_state.get("session_id"):
         return
+    logger.info("세션 전환 | 세션=%s", session_id)
     load_session_from_backend(session_id)
     st.rerun()
 
@@ -142,7 +154,7 @@ def format_session_button_label(session: dict[str, Any], *, active: bool = False
 
 def render_session_history_sidebar() -> None:
     st.divider()
-    if st.button("+ 새 분석", use_container_width=True, key="new_analysis_button"):
+    if st.button("+ 새 분석", width="stretch", key="new_analysis_button"):
         clear_current_session()
         st.rerun()
 
@@ -168,7 +180,7 @@ def render_session_history_sidebar() -> None:
         clicked = st.button(
             format_session_button_label(session, active=is_active),
             key=f"session_history_{session_id}",
-            use_container_width=True,
+            width="stretch",
             disabled=is_active or is_draft,
             type="primary" if is_active else "secondary",
         )

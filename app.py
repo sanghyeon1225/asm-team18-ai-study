@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src.logging_config import configure_logging, get_logger
 from ui.analysis import (
     queue_new_analysis,
     render_analysis_result,
@@ -17,6 +18,10 @@ from ui.config import REPORT_OPTIONS
 from ui.scroll import render_top_anchor, scroll_to_chat_once, scroll_to_top_once
 from ui.session import cleanup_draft_session, render_session_history_sidebar
 from ui.styles import render_chat_styles
+
+
+configure_logging("frontend")
+logger = get_logger(__name__)
 
 
 def _clear_error_and_suggestions() -> None:
@@ -39,9 +44,10 @@ def main() -> None:
             company_name = st.text_input("기업명", value="삼성전자")
             bsns_year = st.number_input("사업연도", min_value=2015, max_value=2100, value=2024, step=1)
             report_name = st.selectbox("보고서 종류", REPORT_OPTIONS)
-            analyze_clicked = st.form_submit_button("분석하기", type="primary", use_container_width=True)
+            analyze_clicked = st.form_submit_button("분석하기", type="primary", width="stretch")
 
     if analyze_clicked:
+        logger.info("분석 버튼 클릭 | 기업=%s | 연도=%s | 보고서=%s", company_name, int(bsns_year), report_name)
         _clear_error_and_suggestions()
         queue_new_analysis(company_name, int(bsns_year), report_name)
 
@@ -55,6 +61,13 @@ def main() -> None:
         st.session_state.pop("pending_analysis_request", None)
         _clear_error_and_suggestions()
         draft_session_id = str(pending_analysis_request.get("draft_session_id") or "")
+        logger.debug(
+            "대기 중 분석 실행 | 기업=%s | 연도=%s | 보고서=%s | 임시세션=%s",
+            pending_analysis_request.get("company_name"),
+            pending_analysis_request.get("bsns_year"),
+            pending_analysis_request.get("report_name"),
+            draft_session_id,
+        )
         try:
             run_analysis_with_progress(
                 str(pending_analysis_request["company_name"]),
@@ -63,6 +76,7 @@ def main() -> None:
                 draft_session_id=draft_session_id,
             )
         except Exception as exc:
+            logger.warning("분석 실패 | 임시세션=%s | 원인=%s", draft_session_id, exc)
             cleanup_draft_session(draft_session_id)
             error_msg = str(exc)
             st.session_state["analysis_error_message"] = error_msg

@@ -10,9 +10,13 @@ from typing import Any
 
 import streamlit as st
 
+from src.logging_config import get_logger
 from ui.api import post_json
 from ui.scroll import render_chat_bottom_anchor
 from ui.session import cache_session, upsert_session_summary
+
+
+logger = get_logger(__name__)
 
 
 def render_user_chat_message(content: str) -> None:
@@ -136,13 +140,14 @@ def render_suggested_questions(context: dict[str, Any]) -> str | None:
     columns = st.columns(2)
     for index, question in enumerate(questions):
         with columns[index % 2]:
-            if st.button(question, key=f"gt-chip-{index}", use_container_width=True):
+            if st.button(question, key=f"gt-chip-{index}", width="stretch"):
                 clicked = question
     return clicked
 
 
 def submit_followup_question(question: str, session_id: str, chat_area: Any) -> None:
     """타이핑 질문과 추천 질문 칩이 공유하는 단일 처리 경로."""
+    logger.info("추가 질문 전송 | 세션=%s | 질문길이=%s자", session_id, len(question.strip()))
     messages = st.session_state.setdefault("messages", [])
     pending_messages = [
         *messages,
@@ -167,9 +172,15 @@ def submit_followup_question(question: str, session_id: str, chat_area: Any) -> 
         analysis = st.session_state.get("last_analysis") or {}
         cache_session(result["session_id"], analysis, messages)
         upsert_session_summary(result["session_id"], analysis, messages)
+        logger.info(
+            "추가 질문 응답 저장 | 세션=%s | 누적메시지=%s개",
+            result["session_id"],
+            len(messages),
+        )
         st.session_state["scroll_to_chat"] = True
         st.rerun()
     except Exception as exc:
+        logger.warning("추가 질문 실패 | 세션=%s | 원인=%s", session_id, exc)
         st.session_state["messages"].append(
             {
                 "role": "assistant",
