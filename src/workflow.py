@@ -14,8 +14,12 @@ from src.financial_analyzer import (
     extract_key_numbers,
     format_ratio,
 )
+from src.logging_config import get_logger
 from src.llm_client import decide_additional_analysis, generate_financial_explanation
 from src.safety import SAFETY_DISCLAIMER, sanitize_financial_answer
+
+
+logger = get_logger(__name__)
 
 
 class FinancialWorkflowState(TypedDict, total=False):
@@ -54,13 +58,22 @@ def resolve_company_node(state: FinancialWorkflowState) -> FinancialWorkflowStat
     if _has_error(state):
         return {}
 
+    company_name = state.get("company_name", "")
+    logger.debug("기업 후보 조회 시작 | 기업=%s", company_name)
     try:
-        candidates = find_corp_candidates(state.get("company_name", ""))
+        candidates = find_corp_candidates(company_name)
         if candidates.empty:
+            logger.warning("기업 후보 없음 | 기업=%s", company_name)
             return _error(f"'{state.get('company_name', '')}'에 해당하는 기업 후보를 찾지 못했습니다.")
 
         selected_company = candidates.iloc[0].fillna("").astype(str).to_dict()
         candidate_companies = candidates.head(10).fillna("").astype(str).to_dict("records")
+        logger.info(
+            "기업 선택 완료 | 기업=%s | 고유번호=%s | 후보=%s개",
+            selected_company.get("corp_name"),
+            selected_company.get("corp_code"),
+            len(candidate_companies),
+        )
         return {
             "corp_code": str(selected_company["corp_code"]),
             "selected_company": selected_company,
@@ -68,6 +81,7 @@ def resolve_company_node(state: FinancialWorkflowState) -> FinancialWorkflowStat
             "error": None,
         }
     except Exception as exc:
+        logger.exception("기업 후보 조회 실패 | 기업=%s", company_name)
         return _error(f"기업 고유번호 조회에 실패했습니다. {exc}")
 
 
@@ -75,14 +89,22 @@ def fetch_current_financials_node(state: FinancialWorkflowState) -> FinancialWor
     if _has_error(state):
         return {}
 
+    logger.debug(
+        "현재 연도 재무제표 조회 시작 | 고유번호=%s | 연도=%s | 보고서=%s",
+        state.get("corp_code"),
+        state.get("year"),
+        state.get("report_code"),
+    )
     try:
         current_df = get_single_company_accounts(
             str(state["corp_code"]),
             int(state["year"]),
             str(state["report_code"]),
         )
+        logger.info("현재 연도 재무제표 조회 완료 | 행=%s개", len(current_df))
         return {"current_df": current_df}
     except Exception as exc:
+        logger.exception("현재 연도 재무제표 조회 실패 | 고유번호=%s", state.get("corp_code"))
         return _error(f"현재 연도 재무제표 조회에 실패했습니다. {exc}")
 
 
@@ -90,14 +112,28 @@ def fetch_previous_financials_node(state: FinancialWorkflowState) -> FinancialWo
     if _has_error(state):
         return {}
 
+    previous_year = int(state["year"]) - 1
+    logger.debug(
+        "전년도 재무제표 조회 시작 | 고유번호=%s | 연도=%s | 보고서=%s",
+        state.get("corp_code"),
+        previous_year,
+        state.get("report_code"),
+    )
     try:
         previous_df = get_single_company_accounts(
             str(state["corp_code"]),
-            int(state["year"]) - 1,
+            previous_year,
             str(state["report_code"]),
         )
+        logger.info("전년도 재무제표 조회 완료 | 행=%s개", len(previous_df))
         return {"previous_df": previous_df}
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "전년도 재무제표 없음 | 고유번호=%s | 연도=%s | 원인=%s",
+            state.get("corp_code"),
+            previous_year,
+            exc,
+        )
         return {"previous_df": None, "previous_numbers": None, "growth": {}}
 
 
@@ -105,8 +141,10 @@ def analyze_financials_node(state: FinancialWorkflowState) -> FinancialWorkflowS
     if _has_error(state):
         return {}
 
+    logger.debug("재무 수치 분석 시작")
     current_df = state.get("current_df")
     if current_df is None or current_df.empty:
+        logger.warning("재무 수치 분석 중단 | 현재 연도 데이터 없음")
         return _error("현재 연도 재무제표 데이터가 비어 있습니다.")
 
     numbers = extract_key_numbers(current_df)
@@ -121,6 +159,13 @@ def analyze_financials_node(state: FinancialWorkflowState) -> FinancialWorkflowS
             previous_numbers = extracted_previous
 
     growth = calculate_growth(numbers, previous_numbers) if previous_numbers else {}
+    missing_keys = [key for key, value in numbers.items() if value is None]
+    logger.info(
+        "재무 수치 분석 완료 | 누락=%s | 위험신호=%s개 | 전년도비교=%s",
+        missing_keys or "none",
+        len(risk_signals),
+        "가능" if previous_numbers is not None else "없음",
+    )
 
     return {
         "numbers": numbers,
@@ -149,11 +194,18 @@ def decide_additional_analysis_node(state: FinancialWorkflowState) -> FinancialW
     if _has_error(state):
         return {}
 
+    logger.debug("추가 분석 판단 시작")
     decision = decide_additional_analysis(
         numbers=state.get("numbers", {}),
         ratios=state.get("ratios", {}),
         growth=state.get("growth", {}),
         risk_signals=state.get("risk_signals", []),
+    )
+    logger.info(
+        "추가 분석 판단 완료 | 필요=%s | 유형=%s | 방식=%s",
+        "예" if decision.get("needs_additional_analysis") else "아니오",
+        decision.get("analysis_types") or [],
+        decision.get("source"),
     )
     return {"agent_decision": decision}
 
@@ -164,8 +216,10 @@ def run_additional_analysis_node(state: FinancialWorkflowState) -> FinancialWork
 
     decision = state.get("agent_decision") or {}
     if not decision.get("needs_additional_analysis"):
+        logger.debug("추가 분석 생성 생략")
         return {"additional_analysis": {}}
 
+    logger.debug("추가 분석 생성 시작 | 유형=%s", decision.get("analysis_types"))
     numbers = state.get("numbers", {})
     ratios = state.get("ratios", {})
     growth = state.get("growth", {})
@@ -232,6 +286,7 @@ def run_additional_analysis_node(state: FinancialWorkflowState) -> FinancialWork
             ],
         )
 
+    logger.info("추가 분석 생성 완료 | 섹션=%s", list(additional_analysis.keys()))
     return {"additional_analysis": additional_analysis}
 
 
@@ -239,6 +294,7 @@ def generate_explanation_node(state: FinancialWorkflowState) -> FinancialWorkflo
     if _has_error(state):
         return {}
 
+    logger.debug("AI 해설 생성 시작")
     try:
         selected_company = state.get("selected_company", {})
         company_name = str(selected_company.get("corp_name") or state.get("company_name", ""))
@@ -251,8 +307,10 @@ def generate_explanation_node(state: FinancialWorkflowState) -> FinancialWorkflo
             risk_signals=state.get("risk_signals", []),
             growth=state.get("growth") if state.get("previous_numbers") else None,
         )
+        logger.info("AI 해설 생성 완료 | 길이=%s자", len(explanation))
         return {"explanation": explanation}
     except Exception as exc:
+        logger.exception("AI 해설 생성 실패")
         return {"explanation": f"AI 해설을 생성하지 못했습니다. {exc}"}
 
 
@@ -262,9 +320,12 @@ def validate_answer_node(state: FinancialWorkflowState) -> FinancialWorkflowStat
 
     explanation = state.get("explanation", "")
     if not explanation:
+        logger.debug("AI 답변 정제 생략 | 빈 답변")
         return {}
 
-    return {"explanation": sanitize_financial_answer(explanation)}
+    sanitized = sanitize_financial_answer(explanation)
+    logger.debug("AI 답변 정제 완료 | 길이=%s자", len(sanitized))
+    return {"explanation": sanitized}
 
 
 def build_financial_workflow():
