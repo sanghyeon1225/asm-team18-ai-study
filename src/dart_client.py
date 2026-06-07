@@ -11,6 +11,8 @@ import requests
 from dotenv import load_dotenv
 from requests import RequestException
 
+from src.logging_config import get_logger
+
 
 DART_CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 DART_SINGLE_COMPANY_ACCOUNTS_URL = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
@@ -22,6 +24,8 @@ REPORT_CODES = {
     "3분기": "11014",
     "사업보고서": "11011",
 }
+
+logger = get_logger(__name__)
 
 
 class DartClientError(RuntimeError):
@@ -118,6 +122,7 @@ def parse_corp_code_zip(zip_binary: bytes) -> pd.DataFrame:
 def download_corp_codes(api_key: str | None = None, timeout: int = 30) -> pd.DataFrame:
     resolved_api_key = (api_key or "").strip() or get_dart_api_key()
 
+    logger.debug("DART 기업 고유번호 다운로드 시작")
     try:
         response = requests.get(
             DART_CORP_CODE_URL,
@@ -126,9 +131,12 @@ def download_corp_codes(api_key: str | None = None, timeout: int = 30) -> pd.Dat
         )
         response.raise_for_status()
     except RequestException as exc:
+        logger.warning("DART 기업 고유번호 다운로드 실패 | 원인=%s", exc)
         raise DartClientError("OpenDART 고유번호 API 호출에 실패했습니다. 네트워크 상태와 API 키를 확인해주세요.") from exc
 
-    return parse_corp_code_zip(response.content)
+    corp_codes = parse_corp_code_zip(response.content)
+    logger.info("DART 기업 고유번호 다운로드 완료 | 행=%s개", len(corp_codes))
+    return corp_codes
 
 
 def get_single_company_accounts(
@@ -144,24 +152,59 @@ def get_single_company_accounts(
         "reprt_code": str(reprt_code).strip(),
     }
 
+    logger.debug(
+        "DART 주요계정 조회 시작 | 고유번호=%s | 연도=%s | 보고서=%s",
+        params["corp_code"],
+        params["bsns_year"],
+        params["reprt_code"],
+    )
     try:
         response = requests.get(DART_SINGLE_COMPANY_ACCOUNTS_URL, params=params, timeout=30)
         response.raise_for_status()
         payload = response.json()
     except RequestException as exc:
+        logger.warning(
+            "DART 주요계정 조회 실패 | 고유번호=%s | 연도=%s | 원인=%s",
+            params["corp_code"],
+            params["bsns_year"],
+            exc,
+        )
         raise DartClientError("OpenDART 단일회사 주요계정 API 호출에 실패했습니다.") from exc
     except ValueError as exc:
+        logger.warning(
+            "DART 주요계정 응답 해석 실패 | 고유번호=%s | 연도=%s",
+            params["corp_code"],
+            params["bsns_year"],
+        )
         raise DartClientError("OpenDART 단일회사 주요계정 JSON 파싱에 실패했습니다.") from exc
 
     status = _clean_text(payload.get("status"))
     message = _clean_text(payload.get("message"))
     if status != "000":
+        logger.warning(
+            "DART 주요계정 응답 오류 | 고유번호=%s | 연도=%s | 상태=%s | 메시지=%s",
+            params["corp_code"],
+            params["bsns_year"],
+            status or "unknown",
+            message,
+        )
         raise DartApiError(status or "unknown", message)
 
     accounts = pd.DataFrame(payload.get("list") or [])
     if accounts.empty:
+        logger.warning(
+            "DART 주요계정 데이터 없음 | 고유번호=%s | 연도=%s",
+            params["corp_code"],
+            params["bsns_year"],
+        )
         raise ValueError("OpenDART 단일회사 주요계정 데이터가 비어 있습니다.")
 
+    logger.info(
+        "DART 주요계정 조회 완료 | 고유번호=%s | 연도=%s | 행=%s개",
+        params["corp_code"],
+        params["bsns_year"],
+        len(accounts),
+    )
     return accounts
 
 
@@ -173,11 +216,14 @@ def load_corp_codes(
 ) -> pd.DataFrame:
     path = Path(cache_path)
     if path.exists() and not force_refresh:
+        logger.debug("DART 기업 고유번호 캐시 사용 | 경로=%s", path)
         return _read_cached_csv(path)
 
+    logger.info("DART 기업 고유번호 캐시 갱신 | 경로=%s | 강제=%s", path, force_refresh)
     corp_codes = download_corp_codes(api_key=api_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     corp_codes.to_csv(path, index=False, encoding="utf-8-sig")
+    logger.info("DART 기업 고유번호 캐시 저장 | 경로=%s | 행=%s개", path, len(corp_codes))
     return corp_codes
 
 
@@ -191,16 +237,20 @@ def find_corp_candidates(
     if not query:
         raise ValueError("기업명을 입력해주세요.")
 
+    logger.debug("DART 기업 후보 검색 시작 | 검색어=%s", query)
     corp_codes = load_corp_codes(cache_path=cache_path, api_key=api_key)
     name_matches = corp_codes["corp_name"].str.contains(query, case=False, regex=False, na=False)
     candidates = corp_codes.loc[name_matches, CORP_CODE_COLUMNS].copy()
 
     if candidates.empty:
+        logger.info("DART 기업 후보 검색 완료 | 검색어=%s | 결과=0개", query)
         return candidates
 
     candidates["_has_stock_code"] = candidates["stock_code"].str.strip().ne("")
     candidates = candidates.sort_values("_has_stock_code", ascending=False, kind="mergesort")
-    return candidates.drop(columns=["_has_stock_code"]).reset_index(drop=True)
+    result = candidates.drop(columns=["_has_stock_code"]).reset_index(drop=True)
+    logger.info("DART 기업 후보 검색 완료 | 검색어=%s | 결과=%s개", query, len(result))
+    return result
 
 
 def find_best_corp_code(

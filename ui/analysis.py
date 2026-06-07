@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from src.dart_client import REPORT_CODES
+from src.logging_config import get_logger
 from src.safety import SAFETY_DISCLAIMER
 from ui.api import post_json
 from ui.formatting import (
@@ -25,6 +26,9 @@ from ui.session import (
     create_draft_session,
     upsert_session_summary,
 )
+
+
+logger = get_logger(__name__)
 
 
 def analysis_context_from_response(result: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +84,13 @@ def run_analysis_with_progress(
 ) -> None:
     render_analysis_overlay(company_name, bsns_year, report_name)
 
+    logger.info(
+        "분석 요청 전송 | 기업=%s | 연도=%s | 보고서=%s | 임시세션=%s",
+        company_name,
+        bsns_year,
+        report_name,
+        draft_session_id,
+    )
     try:
         result = post_json(
             "/analysis",
@@ -90,7 +101,8 @@ def run_analysis_with_progress(
                 "report_name": report_name,
             },
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("분석 요청 실패 | 기업=%s | 연도=%s | 보고서=%s | 원인=%s", company_name, bsns_year, report_name, exc)
         raise
 
     st.session_state["session_id"] = result["session_id"]
@@ -102,6 +114,12 @@ def run_analysis_with_progress(
     st.session_state["session_id"] = result["session_id"]
     cache_session(result["session_id"], analysis, messages)
     upsert_session_summary(result["session_id"], analysis, messages)
+    logger.info(
+        "분석 결과 저장 | 세션=%s | 기업=%s | 메시지=%s개",
+        result["session_id"],
+        analysis.get("company_name"),
+        len(messages),
+    )
     st.session_state["scroll_to_top"] = True
     st.rerun()
 
@@ -109,6 +127,13 @@ def run_analysis_with_progress(
 def queue_new_analysis(company_name: str, bsns_year: int, report_name: str) -> None:
     clear_current_session()
     draft_session_id = create_draft_session(company_name, int(bsns_year), report_name)
+    logger.info(
+        "분석 대기열 등록 | 기업=%s | 연도=%s | 보고서=%s | 임시세션=%s",
+        company_name,
+        bsns_year,
+        report_name,
+        draft_session_id,
+    )
     st.session_state["pending_analysis_request"] = {
         "company_name": company_name,
         "bsns_year": int(bsns_year),
@@ -143,7 +168,7 @@ def render_candidate_info(context: dict[str, Any]) -> None:
             "modify_date": "수정일",
         }
     )
-    st.dataframe(display_candidates.head(10), use_container_width=True, hide_index=True)
+    st.dataframe(display_candidates.head(10), width="stretch", hide_index=True)
 
 
 def render_additional_analysis(context: dict[str, Any]) -> None:
@@ -173,16 +198,17 @@ def render_additional_analysis(context: dict[str, Any]) -> None:
 
 
 def render_analysis_result(context: dict[str, Any]) -> None:
+    logger.debug("분석 결과 렌더링 | 기업=%s | 연도=%s", context.get("company_name"), context.get("year"))
     render_candidate_info(context)
 
     left, right = st.columns(2)
     with left:
         st.subheader("핵심 재무 수치")
-        st.dataframe(build_numbers_table(context["numbers"]), use_container_width=True, hide_index=True)
+        st.dataframe(build_numbers_table(context["numbers"]), width="stretch", hide_index=True)
 
     with right:
         st.subheader("재무비율")
-        st.dataframe(build_ratios_table(context["ratios"]), use_container_width=True, hide_index=True)
+        st.dataframe(build_ratios_table(context["ratios"]), width="stretch", hide_index=True)
 
     st.subheader("핵심 재무 수치 시각화")
     st.bar_chart(build_numbers_chart_data(context["numbers"]))
@@ -197,7 +223,7 @@ def render_analysis_result(context: dict[str, Any]) -> None:
             context.get("growth", {}),
             context.get("previous_data_available", False),
         ),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -224,7 +250,7 @@ def render_analysis_result(context: dict[str, Any]) -> None:
     raw_accounts = context.get("raw_accounts") or []
     if raw_accounts:
         with st.expander("DART 주요계정 원본 일부 보기"):
-            st.dataframe(pd.DataFrame(raw_accounts), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(raw_accounts), width="stretch", hide_index=True)
 
     st.subheader("AI 분석 결과")
     explanation = strip_disclaimer_from_explanation(str(context.get("explanation") or ""))
